@@ -1,0 +1,575 @@
+---
+title: "Evolution of Political Discourse: Analyzing Thematic Trends in Spanish Investiture Speeches (1979-2023)"
+subtitle: "POL42050 - Quantitative Text Analysis"
+author: "Sergi Margalef"
+output: html_document
+format: 
+    html:
+        self-contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load quanteda and data
+
+```{r}
+library(quanteda)
+library(quanteda.textmodels)
+library(quanteda.textstats)
+data = read.csv("data/investiture_speeches_spain.csv")
+```
+
+## Descriptive statistics
+
+```{r}
+corp = corpus(data)
+
+# summary of the corpus
+summary(corp)
+
+# total number of tokens
+sum(ntoken(corp))
+
+# total number of documents
+ndoc(corp)
+
+# mean number of tokens per document
+sum(ntoken(corp))/26
+
+# partido socialista descriptive statistics
+corp %>% 
+  corpus_subset(party == "Partido Socialista Obrero Español") %>%
+  ndoc()
+
+corp %>% 
+  corpus_subset(party == "Partido Socialista Obrero Español") %>%
+  ntoken()
+
+sum(ntoken(corp %>% 
+             corpus_subset(party == "Partido Socialista Obrero Español")))/14
+
+# partido popular descriptive statistics
+corp %>% 
+  corpus_subset(party == "Partido Popular") %>%
+  ndoc()
+
+corp %>% 
+  corpus_subset(party == "Partido Popular") %>%
+  ntoken()
+
+sum(ntoken(corp %>% 
+             corpus_subset(party == "Partido Popular")))/9
+
+# ucd descriptive statistics
+corp %>% 
+  corpus_subset(party == "Unión de Centro Democrático") %>%
+  ndoc()
+
+corp %>%
+  corpus_subset(party == "Unión de Centro Democrático") %>%
+  ntoken()
+
+sum(ntoken(corp %>% 
+             corpus_subset(party == "Unión de Centro Democrático")))/3
+
+```
+
+## Preprocessing
+
+```{r}
+# I wanted to work at the paragraph level, but when doing the corpus_resahpe 
+# I ended up with the same number of documents, 26
+
+# tokenize
+toks = corp %>% 
+  tokens(remove_punct = TRUE,
+         remove_symbols = TRUE) %>% 
+  tokens_remove(pattern = stopwords("es")) %>% 
+  tokens_remove(pattern = c("españa", "español", "española", "españoles", "españolas",
+                            "si", "hoy", "va", "dos", "ser", "así", "debe", "sino", "hacer",
+                            "ello", "puede", "vamos", "año", "aquí", "vez", "decir",
+                            "creo", "hace", "años", "fin", "pues", "tan"))%>% 
+  tokens_tolower()
+
+# standardize party names
+# compound them
+parties = c("partido socialista obrero español", "partido socialista", 
+            "partido popular", "unión de centro democrático", 
+            "unidas podemos", "esquerra republicana", "coalición canaria")
+
+toks = tokens_compound(toks,
+                          pattern = phrase(parties))
+```
+
+```{r}
+# find multi-word expressions
+tstat_col = textstat_collocations(toks, size = 2:3)
+
+head(tstat_col, 100)
+```
+
+
+```{r}
+# compound multi-word expressions
+cols = c("comunidades autónomas", "estado del bienestar", 
+         "crisis económica", "cambio climático", "medio ambiente",
+         "unión europea", "administraciones públicas", "servicios públicos",
+         "seguridad social", "sector público", "salario mínimo", "financiación autonómica",
+         "política económica", "confianza cámara", "crecimiento económico", 
+         "poderes públicos", "política exterior")
+
+toks = tokens_compound(toks,
+                          pattern = phrase(cols))
+
+# create a document-feature matrix
+dfmat = toks %>% 
+  dfm()
+
+# number of features
+nfeat(dfmat)
+
+# remove infrequent terms 
+dfmat_trim = dfm_trim(dfmat, 
+                      min_docfreq = 3,
+                      min_termfreq = 3)
+
+nfeat(dfmat_trim)
+
+# difference in number of features
+nfeat(dfmat) - nfeat(dfmat_trim)
+```
+
+## Topic model keyATM
+
+```{r}
+# load keyATM
+library(keyATM)
+```
+
+```{r}
+# convert dfm to keyATM object
+keyatm_obj = keyATM_read(dfmat_trim)
+```
+
+```{r}
+# set a seed for reproducibility
+set.seed(42)
+
+# run a weightedLDA to test
+keyatm20 = weightedLDA(keyatm_obj, 
+                       model = "base",
+                       number_of_topics = 20)
+
+top_words(keyatm20)
+```
+
+```{r}
+# run a weightedLDA to test with 15 topics
+keyatm15 = weightedLDA(keyatm_obj, 
+                       model = "base",
+                       number_of_topics = 15)
+
+top_words(keyatm15)
+```
+
+```{r}
+# vars for the dynamic model
+vars = docvars(dfmat_trim)
+
+head(vars)
+```
+
+```{r}
+library(dplyr)
+
+# 1979 starts in 1 and increases one period every 4 years
+# 4 years because is the length of a legislature
+vars %>% 
+  as_tibble() %>%
+  mutate(Period = ((vars$year - 1979) %/% 4) + 1) -> vars_period
+
+vars_period %>% select(year, Period)
+```
+
+
+```{r}
+# create a keyword list
+keywords = list(Economy = c("crisis_económica", "crecimiento_económico", "economía", 	"política_económica", "económica"),
+                Employment = c("empleo", "paro", "trabajo", "desempleo"),
+                Welfare = c("estado_bienestar", "salario_mínimo", "servicios_públicos", "seguridad_social"),
+                Health = c("sanidad", "salud", "vacunas", "covid", "sanitario"),
+                International = c("unión_europea", "política_exterior", "internacional", "europa"),
+                Climate = c("cambio_climático", "medio_ambiente", "sostenibilidad", "contaminación"),
+                Constitution = c("constitución", "constitucional", "ley", "estado"),
+                Territorial = c("comunidades_autónomas", "financiación_autonómica", "territorial", "autonomía"),
+                Public = c("administraciones_públicas", "sector_público", "poderes_públicos", "público", "servicio_público"),
+                Institutions = c("confianza_cámara", "parlamento", "congreso", "gobierno", "cámara", "señorías"),
+                Government = c("presidente", "gobierno", "ministro", "poder"),
+                Rights = c("derechos", "libertad", "igualdad", "justicia", "oportunidad"))
+                
+```
+
+
+```{r}
+# run a keyATM dynamic model
+dynamic_keyatm = keyATM(keyatm_obj, 
+                        model = "dynamic",
+                        no_keyword_topics = 3,
+                        keywords = keywords,
+                        model_settings = list(time_index = vars_period$Period,
+                                             num_states = 4),
+                        options = list(seed = 42))
+```
+
+```{r}
+# top words
+top_words(dynamic_keyatm)
+```
+
+```{r}
+# plot the topic proportions
+plot_topicprop(dynamic_keyatm)
+```
+
+
+```{r}
+# run a keyATM model
+tmod_keyatm = keyATM(keyatm_obj, 
+                     model = "base",
+                     no_keyword_topics = 3,
+                     keywords = keywords,
+                     options = list(seed = 42))
+```
+
+```{r}
+# top words
+top_words(tmod_keyatm)
+```
+
+```{r}
+# plot the topic proportions
+plot_topicprop(tmod_keyatm)
+```
+
+```{r}
+# top documents for each topic
+top_docs(tmod_keyatm)
+```
+
+```{r}
+# top topics for each document
+top_topics(tmod_keyatm)
+```
+
+```{r}
+# calculate the mean proportion of each topic across all documents
+colMeans(tmod_keyatm$theta)
+```
+
+```{r}
+# extract topic proportions
+dat_topicprops = as.data.frame(tmod_keyatm$theta)
+
+# combine with document metadata
+dat_all = cbind(docvars(dfmat_trim), dat_topicprops)
+
+head(dat_all,3)
+```
+
+```{r}
+# remove others
+dat_all = subset(dat_all, select = -c(Other_1, Other_2, Other_3))
+
+head(dat_all,3)
+```
+
+
+```{r}
+library(tidyr)
+library(ggplot2)
+
+# transform the data to long format
+dat_long = subset(dat_all, select = -c(X, date))
+
+dat_long = dat_long %>% 
+  pivot_longer(cols = -c(year:result),
+               names_to = "topic",
+               values_to = "proportion")
+
+dat_long$topic <- factor(dat_long$topic, levels = unique(dat_long$topic))
+
+ggplot(dat_long, aes(x = year, y = proportion, color = topic)) +
+  geom_point(size = 1, alpha = 0.5, shape = 1) +
+  geom_smooth(method = "auto", se = FALSE) +  
+  labs(x = "Year",
+       y = "Proportion",
+       color = "Topic") + 
+  theme_bw()
+
+# save plot
+#ggsave("plots/topics.pdf", width = 9, height = 6, family = "Times")
+```
+
+```{r}
+dat_long$topic <- factor(dat_long$topic, levels = unique(dat_long$topic))
+
+
+ggplot(dat_long, aes(x = year, y = proportion)) +
+  geom_point(size = 1, alpha = 0.5, shape = 1) +
+  geom_smooth() +
+  facet_wrap(~topic, scales = "free_y") +
+  labs(x = "Year",
+       y = "Topic Proportion") + 
+  theme_bw()
+
+# save plot
+#ggsave("plots/topics_12.pdf", width = 11, height = 8, family = "Times")
+
+```
+
+## Hypothesis 1
+
+```{r}
+# subset the data into first vote speeches and second vote speeches
+
+# first vote speeches
+first_vote = subset(dat_all, first_second_vote == "first")
+
+# second vote speeches
+second_vote = subset(dat_all, first_second_vote == "second")
+
+# calculate the mean proportion of institutions and government topics for each group
+mean(first_vote$'10_Institutions')
+mean(second_vote$'10_Institutions')
+
+mean(first_vote$'11_Government')
+mean(second_vote$'11_Government')
+```
+
+```{r}
+# run a linear regression model for institutions
+mod_ins = lm(`10_Institutions` ~ first_second_vote, data = dat_all)
+
+summary(mod_ins)
+```
+
+```{r}
+# run a linear regression model for government
+mod_gov = lm(`11_Government` ~ first_second_vote, data = dat_all)
+
+summary(mod_gov)
+```
+
+```{r}
+# create a nice regression table 
+library(texreg)
+
+screenreg(list(mod_ins, mod_gov))
+
+#htmlreg(list(mod_ins, mod_gov), font.size = "footnotesize",
+#       custom.model.names = c("Inst.", "Gov."),
+#       custom.coef.map = list(
+#         "(Intercept)" = "Intercept",
+#         "first_second_votesecond" = "Second Vote"),
+#       file = "table/gov_ins.html")
+```
+
+## Hypothesis 2
+
+```{r}
+# look at economy and employment topics
+# plot economy
+ecoplot = ggplot(dat_all, aes(x = year, y = `1_Economy`)) +
+  geom_point(size = 1, alpha = 0.5, shape = 1) +
+  geom_smooth() +
+  labs(x = "Year",
+       y = "Economy Topic Proportion") + 
+  theme_bw()
+
+ecoplot
+```
+
+```{r}
+# plot employment
+emploplot =ggplot(dat_all, aes(x = year, y = `2_Employment`)) +
+  geom_point(size = 1, alpha = 0.5, shape = 1) +
+  geom_smooth() +
+  labs(x = "Year",
+       y = "Employment Topic Proportion") + 
+  theme_bw()
+
+emploplot
+```
+
+```{r}
+library(patchwork)
+
+# combine the plots
+combinedplot = ecoplot + emploplot
+
+combinedplot
+
+# save combinedplot
+#ggsave("plots/topics_combined.pdf", width = 10, height = 5, family = "Times")
+```
+
+## Hypothesis 3
+
+```{r}
+# look a the constiution topic 
+# plot constitution
+constplot = ggplot(dat_all, aes(x = year, y = `7_Constitution`)) +
+  geom_point(size = 1, alpha = 0.5, shape = 1) +
+  geom_smooth() +
+  labs(x = "Year",
+       y = "Constitution Topic Proportion") + 
+  theme_bw()
+
+constplot
+
+# save constplot
+#ggsave("plots/topics_const.pdf", width = 8, height = 6, family = "Times")
+```
+
+## Hypothesis 4
+
+```{r}
+# look at climate topic
+# plot climate
+climplot = ggplot(dat_all, aes(x = year, y = `6_Climate`)) +
+  geom_point(size = 1, alpha = 0.5, shape = 1) +
+  geom_smooth() +
+  labs(x = "Year",
+       y = "Climate Topic Proportion") + 
+  theme_bw()
+
+climplot
+
+# save climplot
+#ggsave("plots/topics_clim.pdf", width = 8, height = 6, family = "Times")
+```
+
+## Hypothesis 5
+
+```{r}
+# susbet center-right parties and center-left parties
+center_right = subset(dat_all, party %in% c("Partido Popular", "Unión de Centro Democrático"))
+center_left = subset(dat_all, party %in% c("Partido Socialista Obrero Español"))
+
+# calculate the mean proportion of the economy topic for ideologically different parties
+mean(center_right$`1_Economy`)
+mean(center_left$`1_Economy`)
+
+mean(center_right$`2_Employment`)
+mean(center_left$`2_Employment`)
+
+# calculate the mean proportion of the social welfare topics for ideologically different parties
+mean(center_right$`3_Welfare`)
+mean(center_left$`3_Welfare`)
+
+mean(center_right$`12_Rights`)
+mean(center_left$`12_Rights`)
+```
+
+```{r}
+# run linear regression models
+mod_econ = lm(`1_Economy` ~ ideology, data = dat_all)
+
+summary(mod_econ)
+```
+
+```{r}
+mod_emp = lm(`2_Employment` ~ ideology, data = dat_all)
+
+summary(mod_emp)
+```
+
+```{r}
+mod_wel = lm(`3_Welfare` ~ ideology, data = dat_all)
+
+summary(mod_wel)
+```
+
+```{r}
+mod_rig = lm(`12_Rights` ~ ideology, data = dat_all)
+
+summary(mod_rig)
+```
+
+```{r}
+# create a nice regression table
+screenreg(list(mod_econ, mod_emp, mod_wel, mod_rig))
+
+#htmlreg(list(mod_econ, mod_emp, mod_wel, mod_rig),font.size = "footnotesize",
+#       custom.model.names = c("Econ.", "Emp.", "Welfare", "Rights"),
+#       custom.coef.map = list(
+#         "(Intercept)" = "Intercept",
+#         "ideologycenter-right" = "Center Right"),
+#       file = "table/econ_emp_wel_rig.html")
+```
+
+## Validation
+
+```{r}
+# create a dictionary with the same keywords as the keyATM model
+dict = dictionary(list(Economy = c("crisis_económica", "crecimiento_económico", "economía", 	"política_económica", "económica"),
+                Employment = c("empleo", "paro", "trabajo", "desempleo"),
+                Welfare = c("estado_bienestar", "salario_mínimo", "servicios_públicos", "seguridad_social"),
+                Health = c("sanidad", "salud", "vacunas", "covid", "sanitario"),
+                International = c("unión_europea", "política_exterior", "internacional", "europa"),
+                Climate = c("cambio_climático", "medio_ambiente", "sostenibilidad", "contaminación"),
+                Constitution = c("constitución", "constitucional", "ley", "estado"),
+                Territorial = c("comunidades_autónomas", "financiación_autonómica", "territorial", "autonomía"),
+                Public = c("administraciones_públicas", "sector_público", "poderes_públicos", "público", "servicio_público"),
+                Institutions = c("confianza_cámara", "parlamento", "congreso", "gobierno", "cámara", "señorías"),
+                Government = c("presidente", "gobierno", "ministro", "poder"),
+                Rights = c("derechos", "libertad", "igualdad", "justicia", "oportunidad")))
+```
+
+```{r}
+# apply the dictionary to dfmat_trim
+dfmat_dict = dfm_lookup(dfmat_trim, dictionary = dict)
+
+print(dfmat_dict)
+
+```
+
+```{r}
+# get topic proportions
+topic_props = dfmat_dict / rowSums(dfmat_trim)
+
+print(topic_props)
+```
+
+```{r}
+# create a new data frame with the topic proportions
+dat_topic_props = convert(topic_props, to = "data.frame")
+
+# add year
+dat_topic_props$year = dat_all$year
+
+# move year to the first column
+dat_topic_props = dat_topic_props %>% relocate(year)
+
+# make it long for visual representation
+dat_topic_props_long = dat_topic_props %>% 
+  pivot_longer(cols = -c(year:doc_id),
+               names_to = "topic",
+               values_to = "proportion")
+
+dat_topic_props_long$topic <- factor(dat_topic_props_long$topic, levels = unique(dat_topic_props_long$topic))
+
+# plot the topic proportions
+ggplot(dat_topic_props_long, aes(x = year, y = proportion)) +
+  geom_point(size = 1, alpha = 0.5, shape = 1) +
+  geom_smooth() +
+  facet_wrap(~topic, scales = "free_y") +
+  labs(x = "Year",
+       y = "Dictionary Topic Proportion") + 
+  theme_bw()
+
+# save plot
+#ggsave("plots/topics_dict.pdf", width = 11, height = 8, family = "Times")
+```
